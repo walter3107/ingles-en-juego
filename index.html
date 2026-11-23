@@ -948,11 +948,12 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     authError: "",
     authInfo: "",
     authBusy: false,
-    form: { name: "", email: "", password: "", newPassword: "" },
+    form: { name: "", email: "", password: "", newPassword: "", newPassword2: "" },
     deleteConfirm: null,
     claimBusy: false,
     uploadMsg: "",
     recovery: false,
+    changePass: false,
     ready: false
   };
 
@@ -982,7 +983,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     else raw = err.message || err.error_description || err.msg || "";
     var m = String(raw).toLowerCase();
     if (/invalid login|invalid credential|email or password|invalid_credentials/.test(m)) return "El correo o la contraseña no son correctos.";
-    if (/already registered|already been registered|user already|email_exists/.test(m)) return "Ese correo ya tiene una cuenta. Entra o toca «¿Olvidaste tu contraseña?».";
+    if (/already registered|already been registered|user already|email_exists/.test(m)) return "Ese correo ya tiene una cuenta. Entra o toca «¿Olvidaste tu clave?».";
     if (/password.*(6|least|short|weak)|weak_password/.test(m)) return "La contraseña debe tener al menos 6 caracteres.";
     if (/invalid email|email_address_invalid|unable to validate email/.test(m)) return "Ese correo no parece válido. Revísalo con calma.";
     if (/rate limit|too many|over_email_send/.test(m)) return "Demasiados intentos. Espera un momento y vuelve a probar.";
@@ -990,7 +991,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     if (/user not found|user_not_found/.test(m)) return "No encuentro una cuenta con ese correo.";
     if (/email not confirmed|not confirmed/.test(m)) return "Hay que confirmar el correo. Si no te llegó, avísale a Walter.";
     if (/same password/.test(m)) return "Elige una contraseña distinta a la anterior.";
-    if (/expired|otp|token/.test(m) && /link|recover|reset/.test(m)) return "Ese enlace ya no sirve. Pide uno nuevo en «¿Olvidaste tu contraseña?».";
+    if (/expired|otp|token/.test(m) && /link|recover|reset/.test(m)) return "Ese enlace ya no sirve. Pide uno nuevo en «¿Olvidaste tu clave?».";
     if (/no autorizado|not authorized|42501/.test(m)) return "Esta acción es solo para el administrador.";
     if (/propia cuenta|yourself|tu propia/.test(m)) return "Esa acción no se puede hacer sobre tu propia cuenta.";
     if (/al menos un administrador/.test(m)) return "Tiene que quedar al menos un administrador.";
@@ -1013,9 +1014,11 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       if (event === "PASSWORD_RECOVERY") {
         cloud.session = session;
         cloud.recovery = true;
+        cloud.changePass = false;
         ui.view = "recovery";
         cloud.authError = "";
-        cloud.authInfo = "Elige una contraseña nueva, de al menos 6 caracteres.";
+        cloud.authInfo = "Elige una clave nueva, de al menos 6 caracteres.";
+        clearRecoveryUrl();
         render();
         return;
       }
@@ -1037,7 +1040,36 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     return cloud.client;
   }
 
+  function isRecoveryUrl() {
+    try {
+      function typ(qs) {
+        if (!qs) return "";
+        return String(new URLSearchParams(qs).get("type") || "").toLowerCase();
+      }
+      var hash = (location.hash || "").replace(/^#/, "");
+      var search = (location.search || "").replace(/^\?/, "");
+      return typ(hash) === "recovery" || typ(search) === "recovery";
+    } catch (e) { return false; }
+  }
+
+  function clearRecoveryUrl() {
+    try {
+      if (!history.replaceState) return;
+      var path = location.pathname || "/";
+      var p = new URLSearchParams(location.search || "");
+      ["type", "access_token", "refresh_token", "expires_in", "expires_at", "token_type", "code"].forEach(function (k) { p.delete(k); });
+      var s = p.toString();
+      history.replaceState(null, document.title, path + (s ? "?" + s : ""));
+    } catch (e) {}
+  }
+
   function bootCloud() {
+    if (isRecoveryUrl()) {
+      cloud.recovery = true;
+      ui.view = "recovery";
+      cloud.authError = "";
+      if (!cloud.authInfo) cloud.authInfo = "Elige una clave nueva, de al menos 6 caracteres.";
+    }
     setupCloudClient();
     if (!cloud.client) {
       cloud.ready = true;
@@ -1311,13 +1343,10 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     if (!email) { cloud.authError = "Escribe el correo de tu cuenta."; render(); return; }
     if (!cloud.client) { cloud.authError = "No se pudo conectar. Revisa el internet."; render(); return; }
     cloud.authBusy = true; cloud.authError = ""; cloud.authInfo = ""; render();
-    var opts = {};
-    var redir = accountRedirect();
-    if (redir) opts.redirectTo = redir;
-    cloud.client.auth.resetPasswordForEmail(email, opts).then(function (res) {
+    cloud.client.auth.resetPasswordForEmail(email, { redirectTo: "https://walter3107.github.io/ingles-en-juego/" }).then(function (res) {
       cloud.authBusy = false;
       if (res.error) { cloud.authError = authErrorEs(res.error); render(); return; }
-      cloud.authInfo = "Te enviamos un correo para cambiar la contraseña. Mira también la carpeta de spam.";
+      cloud.authInfo = "Te enviamos un correo. Abre el enlace para poner tu clave nueva (revisa también spam).";
       render();
     }).catch(function (err) {
       cloud.authBusy = false;
@@ -1328,17 +1357,32 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
 
   function doSetNewPassword() {
     var pass = String(cloud.form.newPassword || "");
-    if (pass.length < 6) { cloud.authError = "La contraseña debe tener al menos 6 caracteres."; render(); return; }
+    var pass2 = String(cloud.form.newPassword2 || "");
+    if (pass.length < 6) { cloud.authError = "La clave debe tener al menos 6 caracteres."; render(); return; }
+    if (pass !== pass2) { cloud.authError = "Las dos claves no son iguales."; render(); return; }
     if (!cloud.client) { cloud.authError = "No se pudo conectar. Revisa el internet."; render(); return; }
     cloud.authBusy = true; cloud.authError = ""; render();
     cloud.client.auth.updateUser({ password: pass }).then(function (res) {
       cloud.authBusy = false;
       if (res.error) { cloud.authError = authErrorEs(res.error); render(); return; }
       cloud.form.newPassword = "";
+      cloud.form.newPassword2 = "";
+      var fromSettings = !!cloud.changePass;
       cloud.recovery = false;
-      cloud.authInfo = "Contraseña nueva guardada. Ya puedes jugar.";
+      cloud.changePass = false;
+      clearRecoveryUrl();
+      if (fromSettings) {
+        showToast("Clave nueva guardada.");
+        ui.view = "ajustes";
+        render();
+        return;
+      }
+      cloud.authInfo = "Clave nueva guardada. Ya puedes jugar.";
       var sess = cloud.session;
-      if (sess) return enterAccount(sess);
+      if (sess) {
+        ui.view = "home";
+        return enterAccount(sess);
+      }
       ui.view = "auth";
       cloud.authTab = "entrar";
       render();
@@ -1502,7 +1546,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       html += '<input class="settings-in" id="auth-name" data-testid="auth-name" placeholder="Ej. María" value="' + esc(cloud.form.name) + '" maxlength="40" autocomplete="name">';
     }
     if (tab === "olvide") {
-      html += "<p>Escribe tu correo y te enviamos un enlace para una contraseña nueva.</p>";
+      html += "<p>Escribe tu correo y te enviamos un enlace para poner tu clave nueva.</p>";
     }
     html += '<label class="auth-label" for="auth-email">Correo</label>';
     html += '<input class="settings-in" id="auth-email" data-testid="auth-email" type="email" inputmode="email" placeholder="tu@correo.com" value="' + esc(cloud.form.email) + '" autocomplete="' + (tab === "crear" ? "email" : "username") + '">';
@@ -1513,7 +1557,7 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     html += '<div class="auth-actions">';
     if (tab === "entrar") {
       html += '<button class="btn" data-act="auth-signin" data-testid="auth-submit"' + (cloud.authBusy ? " disabled" : "") + ">" + (cloud.authBusy ? "Entrando…" : "Entrar") + "</button>";
-      html += '<button type="button" class="btn ghost" data-act="auth-tab" data-tab="olvide" data-testid="auth-forgot">¿Olvidaste tu contraseña?</button>';
+      html += '<button type="button" class="btn ghost" data-act="auth-tab" data-tab="olvide" data-testid="auth-forgot">¿Olvidaste tu clave?</button>';
     } else if (tab === "crear") {
       html += '<button class="btn" data-act="auth-signup" data-testid="auth-submit"' + (cloud.authBusy ? " disabled" : "") + ">" + (cloud.authBusy ? "Creando…" : "Crear mi cuenta") + "</button>";
     } else {
@@ -1525,13 +1569,20 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
   }
 
   function viewRecovery() {
+    var changing = !!cloud.changePass;
     var html = '<div class="auth-screen" data-testid="recovery-screen">';
-    html += '<p class="kicker">Cuenta</p><h1>Nueva contraseña</h1>';
+    if (changing) html += topBar({ back: "auth-changepass-back", backLabel: "← Tu cuenta" });
+    html += '<p class="kicker">Cuenta</p><h1>Pon tu clave nueva</h1>';
     if (cloud.authError) html += '<div class="auth-error" data-testid="auth-error">' + esc(cloud.authError) + "</div>";
     if (cloud.authInfo) html += '<div class="auth-info">' + esc(cloud.authInfo) + "</div>";
-    html += '<div class="card"><label class="auth-label" for="auth-new-pass">Contraseña nueva (mínimo 6 caracteres)</label>';
-    html += '<input class="settings-in" id="auth-new-pass" data-testid="auth-new-pass" type="password" value="' + esc(cloud.form.newPassword) + '" autocomplete="new-password">';
-    html += '<div class="auth-actions"><button class="btn" data-act="auth-newpass" data-testid="auth-submit"' + (cloud.authBusy ? " disabled" : "") + ">" + (cloud.authBusy ? "Guardando…" : "Guardar contraseña") + "</button></div></div></div>";
+    html += '<div class="card">';
+    html += '<label class="auth-label" for="auth-new-pass">Clave nueva (mínimo 6 caracteres)</label>';
+    html += '<input class="settings-in" id="auth-new-pass" data-testid="auth-new-pass" type="password" value="' + esc(cloud.form.newPassword || "") + '" autocomplete="new-password">';
+    html += '<label class="auth-label" for="auth-new-pass2">Repite la clave</label>';
+    html += '<input class="settings-in" id="auth-new-pass2" data-testid="auth-new-pass2" type="password" value="' + esc(cloud.form.newPassword2 || "") + '" autocomplete="new-password">';
+    html += '<div class="auth-actions"><button class="btn" data-act="auth-newpass" data-testid="auth-submit"' + (cloud.authBusy ? " disabled" : "") + ">" + (cloud.authBusy ? "Guardando…" : "Guardar clave") + "</button>";
+    if (changing) html += '<button type="button" class="btn ghost" data-act="auth-changepass-back">Volver</button>';
+    html += "</div></div></div>";
     return html;
   }
 
@@ -1640,6 +1691,27 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
     if (act === "auth-signup") { doSignUp(); return true; }
     if (act === "auth-forgot") { doForgot(); return true; }
     if (act === "auth-newpass") { doSetNewPassword(); return true; }
+    if (act === "auth-changepass") {
+      cloud.changePass = true;
+      cloud.recovery = false;
+      cloud.authError = "";
+      cloud.authInfo = "Elige una clave nueva, de al menos 6 caracteres.";
+      cloud.form.newPassword = "";
+      cloud.form.newPassword2 = "";
+      ui.view = "recovery";
+      render();
+      return true;
+    }
+    if (act === "auth-changepass-back") {
+      cloud.changePass = false;
+      cloud.authError = "";
+      cloud.authInfo = "";
+      cloud.form.newPassword = "";
+      cloud.form.newPassword2 = "";
+      ui.view = "ajustes";
+      render();
+      return true;
+    }
     if (act === "auth-signout") { doSignOut(); return true; }
     if (act === "play-offline") { goToAuth("entrar"); return true; }
     if (act === "go-auth") { if (progress) save(); goToAuth("entrar"); return true; }
@@ -1701,7 +1773,8 @@ Resources:`;for(let t of c){if(!t||typeof t!=`string`)throw Error(`@supabase/aut
       "auth-name": "name",
       "auth-email": "email",
       "auth-password": "password",
-      "auth-new-pass": "newPassword"
+      "auth-new-pass": "newPassword",
+      "auth-new-pass2": "newPassword2"
     };
     var search = root.querySelector("#admin-search");
     if (search) {
@@ -4734,6 +4807,7 @@ function fold(s) {
       html += '<p class="small muted">Cuenta: ' + esc(em) + (cloud.profile && cloud.profile.role === "admin" ? " · Administrador" : "") + "</p>";
       html += '<div class="row">';
       if (cloud.profile && cloud.profile.role === "admin") html += '<button class="btn" data-act="admin-open" data-testid="admin-btn">👥 Administrar usuarios</button>';
+      html += '<button class="btn ghost" data-act="auth-changepass" data-testid="auth-changepass">Cambiar mi clave</button>';
       html += '<button class="btn ghost" data-act="auth-signout" data-testid="auth-logout">Salir</button></div>';
       var locals = localProfilesWithProgress();
       if (locals.length) {
@@ -4998,7 +5072,7 @@ function fold(s) {
         else if (cloud.authTab === "olvide") doForgot();
         else doSignIn();
       }
-      if (ev.key === "Enter" && ev.target && ev.target.id === "auth-new-pass") { ev.preventDefault(); doSetNewPassword(); }
+      if (ev.key === "Enter" && ev.target && (ev.target.id === "auth-new-pass" || ev.target.id === "auth-new-pass2")) { ev.preventDefault(); doSetNewPassword(); }
       if ((ev.key === " " || ev.key === "Enter") && ev.target && ev.target.getAttribute("data-testid") === "flashcard") { ev.preventDefault(); ui.flip = !ui.flip; render(); }
     };
     root.oninput = function (ev) {
